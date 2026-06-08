@@ -98,5 +98,7 @@ def login_api():
 
 
 if __name__ == "__main__":
-    # Start the Flask development server on host 0.0.0.0 and port 5000
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    import os
+    # Read port dynamically from environment variable (required for Heroku)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
