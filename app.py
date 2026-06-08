@@ -52,6 +52,10 @@ def login_api():
             
         # 3. Format proxies if provided
         proxies_dict = None
+        import os
+        if not proxy:
+            proxy = os.environ.get("DEFAULT_PROXY")
+            
         if proxy:
             proxy = proxy.strip()
             # Basic validation/cleanup of proxy scheme
