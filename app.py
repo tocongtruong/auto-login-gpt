@@ -1,7 +1,12 @@
 import json
 import logging
+import os
 from flask import Flask, request, jsonify
+from dotenv import load_dotenv
 from auto_login import auto_login
+
+# Load environment variables from .env file (for local development)
+load_dotenv()
 
 # Configure Flask app
 app = Flask(__name__)
@@ -52,7 +57,6 @@ def login_api():
             
         # 3. Format proxies if provided
         proxies_dict = None
-        import os
         if not proxy:
             proxy = os.environ.get("DEFAULT_PROXY")
             
@@ -67,6 +71,8 @@ def login_api():
             }
             logger.info(f"Using proxy: {proxy}")
 
+        webhook_url = data.get("webhook_url") or os.environ.get("DEFAULT_WEBHOOK_URL") or None
+
         logger.info(f"Initiating auto-login for email: {email}")
         
         # 4. Perform the auto-login flow (disable disk output)
@@ -75,7 +81,8 @@ def login_api():
             password=password,
             totp_secret=totp_secret,
             proxies=proxies_dict,
-            output_file=False
+            output_file=False,
+            webhook_url=webhook_url
         )
         
         # 5. Build and return responses

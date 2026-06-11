@@ -1,0 +1,12 @@
+# Python caching files
+__pycache__/
+*.pyc
+*$py.class
+
+# Local environment variables
+.env
+
+# Output credentials/cookies files
+cookies*.json
+cookies*_string.txt
+*.log
