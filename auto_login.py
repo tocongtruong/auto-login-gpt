@@ -32,9 +32,9 @@ except ImportError:
     pyotp = None  # type: ignore
 
 # ─── Cấu hình ──────────────────────────────────────────────────────────────
-EMAIL        = "[EMAIL_ADDRESS]"
-PASSWORD     = "[PASSWORD]"
-TOTP_SECRET  = "IKGRXYGPDZHM5XRS755W3QLFBSDGCEUY"  # None nếu không có 2FA
+EMAIL        = "DehlsFolkes20@hotmail.com"
+PASSWORD     = "tocongtruong123456"
+TOTP_SECRET  = "7LRXU6N747KNNLAQWG75WYNADQ3YTMKK"  # None nếu không có 2FA
 WEBHOOK_URL  = ""  # webhook URL để nhận thông tin đăng nhập thành công
 OUTPUT_FILE  = str(Path(__file__).parent / "cookies.json")
 # ───────────────────────────────────────────────────────────────────────────
@@ -317,10 +317,16 @@ def auto_login(
             "Accept-Language": "en-US,en;q=0.9",
         })
 
-        # ── Bước 1: Lấy CSRF token và authorize URL từ chatgpt.com ──
+        # ── Bước 1: Lấy CSRF token và khởi tạo session từ chatgpt.com ──
         print("\n[1/6] Lay CSRF token va init session tu chatgpt.com...")
         
-        # 1a. Lấy CSRF token từ chatgpt.com/api/auth/csrf
+        # 1a. Tải trang chủ chatgpt.com để khởi tạo cookie (đặc biệt là oai-did)
+        try:
+            s.get("https://chatgpt.com/", timeout=15)
+        except Exception as e:
+            print(f"     [!] Canh bao khi tai trang chu chatgpt.com: {e}")
+            
+        # 1b. Lấy CSRF token từ chatgpt.com/api/auth/csrf
         r_csrf = s.get("https://chatgpt.com/api/auth/csrf", timeout=15)
         if r_csrf.status_code != 200:
             raise RuntimeError(f"Lay CSRF token that bai: HTTP {r_csrf.status_code}")
@@ -328,38 +334,98 @@ def auto_login(
         if not csrf_token:
             raise RuntimeError("Khong tim thay CSRF token trong response.")
         
-        # 1b. Gửi POST request để bắt đầu sign-in và lấy oauth URL từ chatgpt.com
-        r_post = s.post(
-            "https://chatgpt.com/api/auth/signin/openai?prompt=login&screen_hint=login",
-            data={"csrfToken": csrf_token},
-            allow_redirects=False,
-            timeout=15
-        )
-        if r_post.status_code != 302:
-            raise RuntimeError(f"Bat dau sign-in that bai: HTTP {r_post.status_code}")
-        oauth_url = r_post.headers.get("Location")
-        if not oauth_url:
-            raise RuntimeError("Khong tim thay redirect URL (oauth_url) trong response.")
-            
-        print("\n[2/6] Lay Device ID (oai-did)...")
-        auth_page = s.get(oauth_url, timeout=15)
-        
-        # Lấy oai-did cookie bằng cách duyệt qua cookie jar để tránh CookieConflict của curl_cffi
+        # 1c. Trích xuất oai-did cookie
         did = None
         for cookie in (getattr(s.cookies, "jar", None) or s.cookies):
             if getattr(cookie, "name", "") == "oai-did":
                 did = getattr(cookie, "value", "")
                 break
         if not did:
-            # Fallback
             did = s.cookies.get("oai-did")
             
+        # Nếu chưa có oai-did, tự sinh ra một UUID làm oai-did
+        import uuid
         if not did:
-            raise RuntimeError(
-                "Khong lay duoc oai-did cookie.\n"
-                "Kiem tra ket noi hoac thu dung proxy."
-            )
+            did = str(uuid.uuid4())
+            s.cookies.set("oai-did", did, domain=".chatgpt.com", path="/")
         print(f"     oai-did: {did[:28]}...")
+        
+        # 1d. Gửi POST request để bắt đầu sign-in và lấy oauth URL từ chatgpt.com
+        # Sử dụng đầy đủ các tham số truy vấn và form data khớp 100% với trình duyệt
+        logging_id = str(uuid.uuid4())
+        params = {
+            "prompt": "login",
+            "ext-passkey-client-capabilities": "11111",
+            "ext-oai-did": did,
+            "auth_session_logging_id": logging_id,
+            "screen_hint": "login_or_signup",
+            "login_hint": email
+        }
+        query_str = urllib.parse.urlencode(params)
+        signin_url = f"https://chatgpt.com/api/auth/signin/openai?{query_str}"
+        
+        r_post = s.post(
+            signin_url,
+            headers={
+                "referer": "https://chatgpt.com/",
+                "content-type": "application/x-www-form-urlencoded",
+            },
+            data={
+                "callbackUrl": "https://chatgpt.com/",
+                "csrfToken": csrf_token,
+                "json": "true"
+            },
+            timeout=15
+        )
+        
+        if r_post.status_code != 200:
+            raise RuntimeError(
+                f"Bat dau sign-in that bai: HTTP {r_post.status_code}\n"
+                f"Response: {r_post.text[:200]}"
+            )
+            
+        try:
+            oauth_url = r_post.json().get("url")
+        except Exception:
+            oauth_url = None
+            
+        if not oauth_url:
+            raise RuntimeError(
+                f"Khong tim thay oauth redirect URL trong JSON response.\n"
+                f"Response: {r_post.text[:200]}"
+            )
+            
+        # ── Bước 2: Lấy authorize session và state ───────────────────
+        print("\n[2/6] Lay authorize session va state...")
+        auth_page = s.get(oauth_url, timeout=15)
+
+        # Lấy oauth state parameter từ redirect chain (auth_page.history) hoặc các URL liên quan
+        urls_to_check = []
+        if auth_page:
+            urls_to_check.append(auth_page.url)
+            if hasattr(auth_page, "history") and auth_page.history:
+                for hist in auth_page.history:
+                    urls_to_check.append(hist.url)
+        if oauth_url:
+            urls_to_check.append(oauth_url)
+
+        state = None
+        for url_to_check in urls_to_check:
+            try:
+                parsed = urllib.parse.urlparse(url_to_check)
+                qs = urllib.parse.parse_qs(parsed.query)
+                if "state" in qs:
+                    state = qs["state"][0]
+                    break
+            except Exception:
+                pass
+
+        if not state:
+            print("     [DEBUG] Danh sach URLs da kiem tra de tim state:")
+            for u in urls_to_check:
+                print(f"       - {u}")
+            raise RuntimeError("Khong lay duoc state parameter tu authorize URL.")
+        print(f"     state: {state[:28]}...")
 
         # Follow continue_url từ auth_page nếu có
         try:
@@ -375,9 +441,9 @@ def auto_login(
         print(f"\n[3/6] Gui email... (Email: {email})")
         sentinel_1 = _build_sentinel(s, did, "authorize_continue")
         lc = s.post(
-            f"{AUTH_BASE}/api/accounts/authorize/continue",
+            f"{AUTH_BASE}/api/accounts/authorize/continue?state={state}",
             headers={
-                "referer":               f"{AUTH_BASE}/log-in",
+                "referer":               f"{AUTH_BASE}/log-in?state={state}",
                 "accept":                "application/json",
                 "content-type":          "application/json",
                 "openai-sentinel-token": sentinel_1,
@@ -403,9 +469,9 @@ def auto_login(
         print(f"\n[4/6] Xac minh mat khau... (Password: {password})")
         sentinel_2 = _build_sentinel(s, did, "authorize_continue")
         pw = s.post(
-            f"{AUTH_BASE}/api/accounts/password/verify",
+            f"{AUTH_BASE}/api/accounts/password/verify?state={state}",
             headers={
-                "referer":               f"{AUTH_BASE}/log-in/password",
+                "referer":               f"{AUTH_BASE}/log-in/password?state={state}",
                 "accept":                "application/json",
                 "content-type":          "application/json",
                 "openai-sentinel-token": sentinel_2,
@@ -448,9 +514,9 @@ def auto_login(
 
             # 4a: issue_challenge
             ic = s.post(
-                f"{AUTH_BASE}/api/accounts/mfa/issue_challenge",
+                f"{AUTH_BASE}/api/accounts/mfa/issue_challenge?state={state}",
                 headers={
-                    "referer":      f"{AUTH_BASE}/mfa-challenge/{factor_id}",
+                    "referer":      f"{AUTH_BASE}/mfa-challenge/{factor_id}?state={state}",
                     "accept":       "application/json",
                     "content-type": "application/json",
                 },
@@ -463,8 +529,8 @@ def auto_login(
 
             # 4b: session dump (trình duyệt gọi bước này)
             s.get(
-                f"{AUTH_BASE}/api/accounts/client_auth_session_dump",
-                headers={"referer": f"{AUTH_BASE}/mfa-challenge/{factor_id}"},
+                f"{AUTH_BASE}/api/accounts/client_auth_session_dump?state={state}",
+                headers={"referer": f"{AUTH_BASE}/mfa-challenge/{factor_id}?state={state}"},
                 timeout=15,
             )
 
@@ -475,9 +541,9 @@ def auto_login(
             print(f"     TOTP code: {code}")
 
             vr = s.post(
-                f"{AUTH_BASE}/api/accounts/mfa/verify",
+                f"{AUTH_BASE}/api/accounts/mfa/verify?state={state}",
                 headers={
-                    "referer":      f"{AUTH_BASE}/mfa-challenge/{factor_id}",
+                    "referer":      f"{AUTH_BASE}/mfa-challenge/{factor_id}?state={state}",
                     "accept":       "application/json",
                     "content-type": "application/json",
                 },
