@@ -309,8 +309,25 @@ def auto_login(
             if _CURL
             else requests.Session()
         )
-        if not _CURL and proxies:
+        if proxies:
             s.proxies.update(proxies)
+            
+        # Kiểm tra IP thực tế của session bằng ipwho.is
+        if proxies:
+            try:
+                print("     [DEBUG] Kiem tra IP thuc te cua session qua https://ipwho.is/...")
+                test_r = s.get("https://ipwho.is/", timeout=10)
+                if test_r.status_code == 200:
+                    ip_data = test_r.json() or {}
+                    print(
+                        f"     [DEBUG] Outgoing IP: {ip_data.get('ip')} "
+                        f"({ip_data.get('country')}, {ip_data.get('city')})"
+                    )
+                else:
+                    print(f"     [DEBUG] Kiem tra IP that bai: HTTP {test_r.status_code}")
+            except Exception as test_err:
+                print(f"     [DEBUG] Loi ket noi qua proxy: {test_err}")
+
         s.headers.update({
             "User-Agent":      UA,
             "Accept":          "application/json, text/plain, */*",

@@ -70,6 +70,22 @@ def login_api():
                 "https": proxy
             }
             logger.info(f"Using proxy: {proxy}")
+            
+            # Kiểm tra proxy hoạt động và log ra IP bằng ipwho.is
+            try:
+                import requests as simple_requests
+                logger.info("Checking proxy connection via https://ipwho.is/...")
+                test_resp = simple_requests.get("https://ipwho.is/", proxies=proxies_dict, timeout=10)
+                if test_resp.status_code == 200:
+                    ip_data = test_resp.json() or {}
+                    logger.info(
+                        f"Proxy test success! Outgoing IP: {ip_data.get('ip')} "
+                        f"({ip_data.get('country')}, {ip_data.get('city')})"
+                    )
+                else:
+                    logger.warning(f"Proxy test failed with HTTP status code: {test_resp.status_code}")
+            except Exception as test_err:
+                logger.error(f"Failed to connect through proxy: {test_err}")
 
         webhook_url = data.get("webhook_url") or os.environ.get("DEFAULT_WEBHOOK_URL") or None
 
